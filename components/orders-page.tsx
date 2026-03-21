@@ -15,7 +15,6 @@ export function OrdersPage({ storeId, realtimeOrders }: OrdersPageProps) {
   const [activeTab, setActiveTab] = useState<"today" | "past">("today")
   const [allOrders, setAllOrders] = useState<FirestoreOrder[]>([])
   const [selectedOrder, setSelectedOrder] = useState<FirestoreOrder | null>(null)
-  const [topOrderImage, setTopOrderImage] = useState<string>("")
 
   // Convert Firestore timestamp to Date
   const convertTimestamp = (timestamp: unknown): Date => {
@@ -58,12 +57,6 @@ export function OrdersPage({ storeId, realtimeOrders }: OrdersPageProps) {
           }
         })
         setAllOrders(orders)
-        
-        // Set top order image from first order's first item (if available)
-        if (orders.length > 0 && orders[0].items.length > 0) {
-          // Use a placeholder based on order - in real app this would come from product images
-          setTopOrderImage("/images/food-1.jpg")
-        }
       },
       (err) => {
         console.error("Error fetching orders:", err)
@@ -73,16 +66,17 @@ export function OrdersPage({ storeId, realtimeOrders }: OrdersPageProps) {
     return () => unsubscribe()
   }, [storeId])
 
-  // Filter today's orders
+  // Filter today's orders - show pending, accepted, and completed (ready_for_pickup)
   const todayOrders = allOrders.filter(order => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
     const orderDate = new Date(order.createdAt)
     orderDate.setHours(0, 0, 0, 0)
-    return orderDate.getTime() === today.getTime()
+    // Show all orders for today except rejected ones
+    return orderDate.getTime() === today.getTime() && order.status !== "rejected"
   })
 
-  // Filter past orders (completed/ready_for_pickup within last 14 days)
+  // Filter past orders (accepted or completed within last 14 days, excluding today)
   const pastOrders = allOrders.filter(order => {
     const fourteenDaysAgo = new Date()
     fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
@@ -94,12 +88,17 @@ export function OrdersPage({ storeId, realtimeOrders }: OrdersPageProps) {
     const orderDate = new Date(order.createdAt)
     orderDate.setHours(0, 0, 0, 0)
     
-    const isCompleted = order.status === "ready_for_pickup"
+    const isAcceptedOrCompleted = order.status === "ready_for_pickup" || order.status === "accepted"
     const isWithin14Days = orderDate >= fourteenDaysAgo && orderDate < today
-    return isCompleted && isWithin14Days
+    return isAcceptedOrCompleted && isWithin14Days
   })
 
   const displayedOrders = activeTab === "today" ? todayOrders : pastOrders
+
+  // Get top order image from most recent order's first item
+  const topOrderImage = allOrders.length > 0 && allOrders[0].items.length > 0 && allOrders[0].items[0].image
+    ? allOrders[0].items[0].image
+    : null
 
   // Format time
   const formatTime = (date: Date) => {
@@ -127,9 +126,9 @@ export function OrdersPage({ storeId, realtimeOrders }: OrdersPageProps) {
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-muted overflow-hidden">
               {topOrderImage ? (
-                <img src={topOrderImage} alt="Top order" className="w-full h-full object-cover" />
+                <img src={topOrderImage} alt="Recent order" className="w-full h-full object-cover" />
               ) : (
-                <div className="w-full h-full bg-gray-200" />
+                <div className="w-full h-full bg-muted" />
               )}
             </div>
           </div>
@@ -205,13 +204,25 @@ interface OrderCardProps {
 }
 
 function OrderCard({ order, formatTime, getDisplayStatus, onClick }: OrderCardProps) {
+  // Get first item's image for the order card
+  const firstItemImage = order.items.length > 0 && order.items[0].image
+    ? order.items[0].image
+    : null
+
   return (
     <div 
       onClick={onClick}
       className="bg-card border border-border rounded-xl p-4 flex items-center gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer"
     >
-      <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-        <span className="text-primary font-bold text-sm">#{order.orderId.slice(-3)}</span>
+      {/* Product image or fallback */}
+      <div className="w-14 h-14 rounded-xl overflow-hidden bg-muted shrink-0">
+        {firstItemImage ? (
+          <img src={firstItemImage} alt="Order item" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full bg-primary/10 flex items-center justify-center">
+            <span className="text-primary font-bold text-sm">#{order.orderId.slice(-3)}</span>
+          </div>
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">
@@ -231,10 +242,11 @@ function OrderCard({ order, formatTime, getDisplayStatus, onClick }: OrderCardPr
 }
 
 function OrderStatusBadge({ status }: { status: "pending" | "accepted" | "completed" }) {
+  // Status colors: Pending = orange, Accepted = green, Completed = blue
   const config: Record<string, { bg: string; text: string; label: string }> = {
     pending: { bg: "bg-[#f97316]/15", text: "text-[#f97316]", label: "Pending" },
-    accepted: { bg: "bg-primary/15", text: "text-primary", label: "Accepted" },
-    completed: { bg: "bg-[#22c55e]/15", text: "text-[#22c55e]", label: "Completed" },
+    accepted: { bg: "bg-[#22c55e]/15", text: "text-[#22c55e]", label: "Accepted" },
+    completed: { bg: "bg-[#3b82f6]/15", text: "text-[#3b82f6]", label: "Completed" },
   }
   const c = config[status] || config.pending
   return (
@@ -260,38 +272,47 @@ function OrderDetailsModal({ order, onClose }: OrderDetailsModalProps) {
       
       {/* Modal */}
       <div 
-        className="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[80vh] flex flex-col"
-        style={{
-          backdropFilter: "blur(20px)",
-          background: "rgba(255, 255, 255, 0.95)",
-        }}
+        className="relative w-full max-w-md mx-4 bg-card rounded-2xl shadow-2xl overflow-hidden max-h-[80vh] flex flex-col animate-in fade-in zoom-in-95 duration-200"
       >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
-          <h2 className="text-xl font-bold text-gray-900">Order #{order.orderId}</h2>
+        <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0">
+          <h2 className="text-xl font-bold text-card-foreground">Order #{order.orderId}</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-full hover:bg-gray-100 transition-colors"
+            className="p-1 rounded-full hover:bg-muted transition-colors"
             aria-label="Close"
           >
-            <X className="w-5 h-5 text-gray-500" />
+            <X className="w-5 h-5 text-muted-foreground" />
           </button>
         </div>
 
         {/* Customer Info */}
-        <div className="px-6 py-3 border-b border-gray-100 shrink-0">
-          <h3 className="text-lg font-semibold text-gray-900">{order.userName}</h3>
-          <p className="text-sm text-gray-500">{order.destinationAddress}</p>
+        <div className="px-6 py-3 border-b border-border shrink-0">
+          <h3 className="text-lg font-semibold text-card-foreground">{order.userName}</h3>
+          <p className="text-sm text-muted-foreground">{order.destinationAddress}</p>
         </div>
 
-        {/* Items List - Scrollable */}
-        <div className="flex-1 overflow-y-auto px-6 py-3 border-b border-gray-100">
+        {/* Items List - Scrollable with images */}
+        <div className="flex-1 overflow-y-auto px-6 py-3 border-b border-border">
           {order.items.map((item, index) => (
-            <div key={index} className="flex justify-between items-center py-2">
-              <span className="text-gray-700">
-                {item.name} {item.quantity && item.quantity > 1 ? `x${item.quantity}` : ""}
-              </span>
-              <span className="text-gray-600">ZMW {item.price.toFixed(2)}</span>
+            <div key={index} className="flex items-center gap-3 py-2">
+              {/* Product Image */}
+              <div className="w-12 h-12 rounded-lg overflow-hidden bg-muted shrink-0">
+                {item.image ? (
+                  <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-primary/10 flex items-center justify-center">
+                    <span className="text-primary text-xs font-medium">{item.name.charAt(0)}</span>
+                  </div>
+                )}
+              </div>
+              {/* Product Details */}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-card-foreground">
+                  {item.name} {item.quantity && item.quantity > 1 ? `x${item.quantity}` : ""}
+                </p>
+              </div>
+              <span className="text-sm font-semibold text-card-foreground">ZMW {item.price.toFixed(2)}</span>
             </div>
           ))}
         </div>
@@ -299,16 +320,16 @@ function OrderDetailsModal({ order, onClose }: OrderDetailsModalProps) {
         {/* Pricing Summary */}
         <div className="px-6 py-4 shrink-0">
           <div className="flex justify-between items-center py-1">
-            <span className="text-gray-500">Subtotal</span>
-            <span className="text-gray-700">ZMW {order.subtotal.toFixed(2)}</span>
+            <span className="text-sm text-muted-foreground">Subtotal</span>
+            <span className="text-sm text-card-foreground">ZMW {order.subtotal.toFixed(2)}</span>
           </div>
           <div className="flex justify-between items-center py-1">
-            <span className="text-gray-500">Delivery Fee</span>
-            <span className="text-gray-700">ZMW {order.deliveryFee.toFixed(2)}</span>
+            <span className="text-sm text-muted-foreground">Delivery Fee</span>
+            <span className="text-sm text-card-foreground">ZMW {order.deliveryFee.toFixed(2)}</span>
           </div>
-          <div className="flex justify-between items-center py-2 mt-2 border-t border-gray-100">
-            <span className="text-lg font-bold text-gray-900">Total</span>
-            <span className="text-lg font-bold text-gray-900">ZMW {order.total.toFixed(2)}</span>
+          <div className="flex justify-between items-center py-2 mt-2 border-t border-border">
+            <span className="text-lg font-bold text-card-foreground">Total</span>
+            <span className="text-lg font-bold text-card-foreground">ZMW {order.total.toFixed(2)}</span>
           </div>
         </div>
       </div>

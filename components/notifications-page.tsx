@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { ChevronLeft, DollarSign, Clock, X } from "lucide-react"
+import { ChevronLeft, DollarSign, CreditCard, Truck, Megaphone, X, Clock } from "lucide-react"
 import type { FirestoreOrder } from "@/components/order-popup-panel"
 
 interface NotificationsPageProps {
@@ -10,19 +10,85 @@ interface NotificationsPageProps {
   onMarkAllRead: () => void
 }
 
-export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: NotificationsPageProps) {
-  const [readOrderIds, setReadOrderIds] = useState<Set<string>>(new Set())
-  const [showPendingList, setShowPendingList] = useState(false)
+// Notification card types matching the reference image
+interface NotificationItem {
+  id: string
+  type: "new_order" | "payment" | "driver" | "system"
+  title: string
+  description: string
+  timestamp: Date
+  read: boolean
+  orderId?: string
+  order?: FirestoreOrder
+}
 
-  // Get time since order was created
-  const getTimeSince = (createdAt: Date): string => {
+export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: NotificationsPageProps) {
+  const [readIds, setReadIds] = useState<Set<string>>(new Set())
+  const [showPendingOrders, setShowPendingOrders] = useState(false)
+
+  // Build notification items from pending orders and static notifications
+  const buildNotifications = (): NotificationItem[] => {
+    const notifications: NotificationItem[] = []
+
+    // Add "New Order Received" card for the most recent pending order
+    if (pendingOrders.length > 0) {
+      const mostRecentOrder = pendingOrders[0]
+      notifications.push({
+        id: `new_order_${mostRecentOrder.id}`,
+        type: "new_order",
+        title: "New Order Received!",
+        description: `Order #${mostRecentOrder.orderId} for ${mostRecentOrder.userName} (Total: ZMW ${mostRecentOrder.total.toFixed(2)}) is pending fulfillment.`,
+        timestamp: mostRecentOrder.createdAt,
+        read: readIds.has(`new_order_${mostRecentOrder.id}`),
+        orderId: mostRecentOrder.orderId,
+        order: mostRecentOrder,
+      })
+    }
+
+    // Add static notification cards (matching the reference image)
     const now = new Date()
-    const diffMs = now.getTime() - createdAt.getTime()
+    
+    notifications.push({
+      id: "payment_captured",
+      type: "payment",
+      title: "Payment Captured",
+      description: "Payment for Order #45815 (Mike L.) of $42.00 was successfully processed.",
+      timestamp: new Date(now.getTime() - 14 * 60 * 1000), // 14 min ago
+      read: readIds.has("payment_captured"),
+    })
+
+    notifications.push({
+      id: "driver_assigned",
+      type: "driver",
+      title: "Driver Assigned",
+      description: "Driver Alex R. has accepted Order #45812 for delivery.",
+      timestamp: new Date(now.getTime() - 35 * 60 * 1000), // 35 min ago
+      read: readIds.has("driver_assigned"),
+    })
+
+    notifications.push({
+      id: "system_message",
+      type: "system",
+      title: "System Message",
+      description: "App Update: Version 3.4.1 is available now. Bug fixes & improvements.",
+      timestamp: new Date(now.getTime() - 52 * 60 * 1000), // 52 min ago
+      read: readIds.has("system_message"),
+    })
+
+    return notifications
+  }
+
+  const notifications = buildNotifications()
+
+  // Get time since for display
+  const getTimeSince = (date: Date): string => {
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)
     
     if (diffMins < 1) return "Just now"
     if (diffMins === 1) return "1 min ago"
-    if (diffMins < 60) return `${diffMins} mins ago`
+    if (diffMins < 60) return `${diffMins} min ago`
     
     const diffHours = Math.floor(diffMins / 60)
     if (diffHours === 1) return "1 hour ago"
@@ -31,29 +97,67 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
     return "1+ day ago"
   }
 
-  // Mark notification as read when tapped
-  const handleNotificationTap = (orderId: string) => {
-    setReadOrderIds(prev => new Set([...prev, orderId]))
-    setShowPendingList(true)
+  // Handle notification tap
+  const handleNotificationTap = (notification: NotificationItem) => {
+    // Mark as read
+    setReadIds(prev => new Set([...prev, notification.id]))
+    
+    // If it's a new order notification, show pending orders list
+    if (notification.type === "new_order") {
+      setShowPendingOrders(true)
+    }
   }
 
   // Mark all as read
   const handleMarkAllRead = () => {
-    const allIds = new Set(pendingOrders.map(o => o.id))
-    setReadOrderIds(allIds)
+    const allIds = new Set(notifications.map(n => n.id))
+    setReadIds(allIds)
     onMarkAllRead()
   }
 
-  // Check if notification has unread badge
-  const hasUnreadBadge = (orderId: string) => !readOrderIds.has(orderId)
-
   // Count unread
-  const unreadCount = pendingOrders.filter(o => !readOrderIds.has(o.id)).length
+  const unreadCount = notifications.filter(n => !n.read).length
+
+  // Get icon and color config for notification type
+  const getNotificationConfig = (type: NotificationItem["type"]) => {
+    switch (type) {
+      case "new_order":
+        return {
+          icon: DollarSign,
+          bgColor: "bg-[#22c55e]/15",
+          iconColor: "text-[#22c55e]",
+        }
+      case "payment":
+        return {
+          icon: CreditCard,
+          bgColor: "bg-[#3b82f6]/15",
+          iconColor: "text-[#3b82f6]",
+        }
+      case "driver":
+        return {
+          icon: Truck,
+          bgColor: "bg-[#14b8a6]/15",
+          iconColor: "text-[#14b8a6]",
+        }
+      case "system":
+        return {
+          icon: Megaphone,
+          bgColor: "bg-[#a855f7]/15",
+          iconColor: "text-[#a855f7]",
+        }
+      default:
+        return {
+          icon: DollarSign,
+          bgColor: "bg-muted",
+          iconColor: "text-muted-foreground",
+        }
+    }
+  }
 
   return (
     <div className="flex flex-col h-full">
       {/* Fixed Header */}
-      <div className="bg-card px-4 pt-5 pb-4 shrink-0">
+      <div className="bg-card px-4 pt-5 pb-4 shrink-0 border-b border-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button className="text-card-foreground" aria-label="Go back">
@@ -65,7 +169,7 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
             <button
               id="markAllReadButton"
               onClick={handleMarkAllRead}
-              className="text-sm font-medium text-primary transition-colors duration-200 hover:text-primary/80"
+              className="text-sm font-medium text-muted-foreground transition-colors duration-200 hover:text-card-foreground"
             >
               Mark all as read
             </button>
@@ -74,89 +178,73 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
       </div>
 
       {/* Scrollable Notifications List */}
-      <div id="notificationsList" className="flex-1 overflow-y-auto px-4 pb-2 scrollbar-hide">
+      <div id="notificationsList" className="flex-1 overflow-y-auto px-4 py-4 scrollbar-hide">
         <div className="flex flex-col gap-3">
-          {pendingOrders.length === 0 ? (
+          {notifications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mb-4">
                 <DollarSign className="w-8 h-8 text-muted-foreground" />
               </div>
-              <p className="text-muted-foreground font-medium">No order received</p>
+              <p className="text-muted-foreground font-medium">No notifications</p>
               <p className="text-muted-foreground/70 text-sm mt-1">
-                New orders will appear here
+                New notifications will appear here
               </p>
             </div>
           ) : (
-            pendingOrders.map((order) => (
-              <NotificationCard 
-                key={order.id} 
-                order={order}
-                hasUnread={hasUnreadBadge(order.id)}
-                getTimeSince={getTimeSince}
-                onTap={() => handleNotificationTap(order.id)}
-              />
-            ))
+            notifications.map((notification) => {
+              const config = getNotificationConfig(notification.type)
+              const Icon = config.icon
+              
+              return (
+                <div
+                  key={notification.id}
+                  onClick={() => handleNotificationTap(notification)}
+                  className="bg-card border border-border rounded-xl p-4 flex items-start gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer relative"
+                >
+                  {/* Unread indicator */}
+                  {!notification.read && (
+                    <span className="absolute top-4 left-3 w-2.5 h-2.5 rounded-full bg-[#f97316]" />
+                  )}
+
+                  {/* Icon */}
+                  <div className={`${config.bgColor} w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ml-2`}>
+                    <Icon className={`w-6 h-6 ${config.iconColor}`} />
+                  </div>
+
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-bold text-card-foreground">{notification.title}</h3>
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                      {notification.description}
+                    </p>
+                    <p className="text-xs text-muted-foreground/70 mt-1.5">
+                      {getTimeSince(notification.timestamp)}
+                    </p>
+                  </div>
+                </div>
+              )
+            })
           )}
         </div>
+        
+        {/* Older Notifications Link */}
+        {notifications.length > 0 && (
+          <div className="text-center mt-6 pb-4">
+            <button className="text-sm text-muted-foreground/60 font-medium">
+              Older Notifications
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Pending Orders Modal */}
-      {showPendingList && (
+      {showPendingOrders && (
         <PendingOrdersModal 
           orders={pendingOrders}
-          onClose={() => setShowPendingList(false)}
+          onClose={() => setShowPendingOrders(false)}
           getTimeSince={getTimeSince}
         />
       )}
-    </div>
-  )
-}
-
-interface NotificationCardProps {
-  order: FirestoreOrder
-  hasUnread: boolean
-  getTimeSince: (date: Date) => string
-  onTap: () => void
-}
-
-function NotificationCard({ order, hasUnread, getTimeSince, onTap }: NotificationCardProps) {
-  // Live minute counter
-  const [timeDisplay, setTimeDisplay] = useState(getTimeSince(order.createdAt))
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTimeDisplay(getTimeSince(order.createdAt))
-    }, 60000) // Update every minute
-
-    return () => clearInterval(interval)
-  }, [order.createdAt, getTimeSince])
-
-  return (
-    <div 
-      onClick={onTap}
-      className="bg-card border border-border rounded-xl p-4 flex items-start gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer relative"
-    >
-      {/* Unread badge */}
-      {hasUnread && (
-        <span className="absolute top-2 left-2 w-2.5 h-2.5 rounded-full bg-destructive" />
-      )}
-
-      {/* Icon */}
-      <div className="bg-[#22c55e]/15 w-10 h-10 rounded-full flex items-center justify-center shrink-0 ml-2">
-        <DollarSign className="w-5 h-5 text-[#22c55e]" />
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <h3 className="text-sm font-bold text-card-foreground">New order received!</h3>
-        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-          Order #{order.orderId} for {order.userName} (Total: ZMW {order.total.toFixed(2)}) is pending fulfillment.
-        </p>
-        <div className="flex items-center gap-1 mt-1.5 text-muted-foreground/70">
-          <Clock className="w-3 h-3" />
-          <span className="text-[10px]">{timeDisplay}</span>
-        </div>
-      </div>
     </div>
   )
 }
@@ -178,14 +266,10 @@ function PendingOrdersModal({ orders, onClose, getTimeSince }: PendingOrdersModa
       
       {/* Modal */}
       <div 
-        className="relative flex flex-col h-full bg-background"
-        style={{
-          backdropFilter: "blur(20px)",
-          background: "rgba(255, 255, 255, 0.98)",
-        }}
+        className="relative flex flex-col h-full bg-background animate-in slide-in-from-right duration-200"
       >
         {/* Fixed Header */}
-        <div className="px-4 pt-5 pb-4 border-b border-border flex items-center justify-between shrink-0">
+        <div className="px-4 pt-5 pb-4 border-b border-border flex items-center justify-between shrink-0 bg-card">
           <div className="flex items-center gap-3">
             <button 
               onClick={onClose}
@@ -210,6 +294,9 @@ function PendingOrdersModal({ orders, onClose, getTimeSince }: PendingOrdersModa
           {orders.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <p className="text-muted-foreground">No pending orders</p>
+              <p className="text-muted-foreground/70 text-sm mt-1">
+                Pending orders will appear here when received
+              </p>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -227,6 +314,7 @@ function PendingOrdersModal({ orders, onClose, getTimeSince }: PendingOrdersModa
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">{order.userName}</p>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5 truncate">{order.destinationAddress}</p>
                   <div className="flex items-center justify-between mt-2">
                     <p className="text-sm font-bold text-card-foreground">
                       ZMW {order.total.toFixed(2)}

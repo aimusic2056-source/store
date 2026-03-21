@@ -19,8 +19,6 @@ interface UseRealtimeOrdersReturn {
 }
 
 export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersReturn {
-  const [pendingOrders, setPendingOrders] = useState<FirestoreOrder[]>([])
-  const [acceptedOrders, setAcceptedOrders] = useState<FirestoreOrder[]>([])
   const [allOrders, setAllOrders] = useState<FirestoreOrder[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -38,35 +36,6 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
     return new Date()
   }
 
-  // Filter today's orders
-  const getTodayOrders = useCallback((orders: FirestoreOrder[]): FirestoreOrder[] => {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    return orders.filter(order => {
-      const orderDate = new Date(order.createdAt)
-      orderDate.setHours(0, 0, 0, 0)
-      return orderDate.getTime() === today.getTime()
-    })
-  }, [])
-
-  // Filter past orders (last 14 days, status = ready_for_pickup/completed)
-  const getPastOrders = useCallback((orders: FirestoreOrder[]): FirestoreOrder[] => {
-    const fourteenDaysAgo = new Date()
-    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
-    fourteenDaysAgo.setHours(0, 0, 0, 0)
-    
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-
-    return orders.filter(order => {
-      const orderDate = new Date(order.createdAt)
-      orderDate.setHours(0, 0, 0, 0)
-      const isCompleted = order.status === "ready_for_pickup" || order.status === "rejected"
-      const isWithin14Days = orderDate >= fourteenDaysAgo && orderDate < today
-      return isCompleted && isWithin14Days
-    })
-  }, [])
-
   // Dismiss popup handler
   const dismissPopup = useCallback(() => {
     if (pendingOrderForPopup) {
@@ -78,23 +47,20 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
   // Handle status update from popup
   const handleStatusUpdate = useCallback((orderId: string, newStatus: string) => {
     // Update local state immediately for instant UI feedback
-    if (newStatus === "accepted") {
-      setPendingOrders(prev => prev.filter(o => o.id !== orderId))
-      setAcceptedOrders(prev => {
-        const order = pendingOrders.find(o => o.id === orderId)
-        if (order) {
-          return [...prev, { ...order, status: "accepted" as const }]
-        }
-        return prev
-      })
-    } else if (newStatus === "rejected" || newStatus === "ready_for_pickup") {
-      setPendingOrders(prev => prev.filter(o => o.id !== orderId))
-      setAcceptedOrders(prev => prev.filter(o => o.id !== orderId))
-    }
+    setAllOrders(prev => prev.map(order => 
+      order.id === orderId 
+        ? { ...order, status: newStatus as FirestoreOrder["status"] }
+        : order
+    ))
     
     // Add to dismissed so popup doesn't reappear
     setDismissedOrderIds(prev => new Set([...prev, orderId]))
-  }, [pendingOrders])
+    
+    // Clear popup if this was the displayed order
+    if (pendingOrderForPopup?.id === orderId) {
+      setPendingOrderForPopup(null)
+    }
+  }, [pendingOrderForPopup])
 
   useEffect(() => {
     if (!storeId) {
@@ -102,16 +68,19 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
       return
     }
 
-    console.log("[v0] Listening for storeId:", storeId)
-
     setIsLoading(true)
     setError(null)
 
-    // Query for pending and accepted orders
+    // Calculate 14 days ago for the query
+    const fourteenDaysAgo = new Date()
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
+    fourteenDaysAgo.setHours(0, 0, 0, 0)
+
+    // Query for ALL orders for this store (to include completed orders for persistence)
+    // This fetches pending, accepted, and ready_for_pickup orders
     const ordersQuery = query(
       collection(db, "orders"),
       where("storeId", "==", storeId),
-      where("status", "in", ["pending", "accepted"]),
       orderBy("createdAt", "desc")
     )
 
@@ -119,8 +88,6 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
     const unsubscribe = onSnapshot(
       ordersQuery,
       (snapshot) => {
-        console.log("[v0] Snapshot received, docs count:", snapshot.docs.length)
-        
         const orders: FirestoreOrder[] = snapshot.docs.map((doc) => {
           const data = doc.data()
           return {
@@ -138,19 +105,23 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
           }
         })
 
-        const pending = orders.filter(o => o.status === "pending")
-        const accepted = orders.filter(o => o.status === "accepted")
+        // Filter out rejected orders and orders older than 14 days
+        const filteredOrders = orders.filter(order => {
+          const orderDate = new Date(order.createdAt)
+          orderDate.setHours(0, 0, 0, 0)
+          
+          // Exclude rejected orders
+          if (order.status === "rejected") return false
+          
+          // Keep orders from last 14 days
+          return orderDate >= fourteenDaysAgo
+        })
         
-        console.log("[v0] Pending orders:", pending.length, "Accepted orders:", accepted.length)
-        
-        // Update state
-        setPendingOrders(pending)
-        setAcceptedOrders(accepted)
-        setAllOrders(orders)
+        setAllOrders(filteredOrders)
         setIsLoading(false)
       },
       (err) => {
-        console.error("[v0] Error listening to orders:", err)
+        console.error("Error listening to orders:", err)
         setError(err.message)
         setIsLoading(false)
       }
@@ -160,26 +131,45 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
   }, [storeId])
 
   // Separate effect to handle popup triggering based on pending orders
-  // This runs whenever pendingOrders changes and checks if we should show a popup
   useEffect(() => {
+    // Find pending orders
+    const pendingOrders = allOrders.filter(o => o.status === "pending")
+    
     // Find the first pending order that hasn't been dismissed
     const nextOrder = pendingOrders.find(o => !dismissedOrderIds.has(o.id))
     
-    console.log("[v0] Checking for popup - pendingOrders:", pendingOrders.length, 
-      "dismissedIds:", dismissedOrderIds.size, 
-      "currentPopup:", pendingOrderForPopup?.id || "none",
-      "nextOrder:", nextOrder?.id || "none")
-    
     // If there's a pending order that's not dismissed and we're not showing any popup
     if (nextOrder && !pendingOrderForPopup) {
-      console.log("[v0] Showing popup for order:", nextOrder.id)
       setPendingOrderForPopup(nextOrder)
     }
-  }, [pendingOrders, dismissedOrderIds, pendingOrderForPopup])
+  }, [allOrders, dismissedOrderIds, pendingOrderForPopup])
 
   // Compute derived values
-  const todayOrders = getTodayOrders(allOrders)
-  const pastOrders = getPastOrders(allOrders)
+  const pendingOrders = allOrders.filter(o => o.status === "pending")
+  const acceptedOrders = allOrders.filter(o => o.status === "accepted")
+
+  // Today's orders (all statuses except rejected)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  
+  const todayOrders = allOrders.filter(order => {
+    const orderDate = new Date(order.createdAt)
+    orderDate.setHours(0, 0, 0, 0)
+    return orderDate.getTime() === today.getTime()
+  })
+
+  // Past orders (accepted or completed within last 14 days, excluding today)
+  const fourteenDaysAgo = new Date()
+  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
+  fourteenDaysAgo.setHours(0, 0, 0, 0)
+
+  const pastOrders = allOrders.filter(order => {
+    const orderDate = new Date(order.createdAt)
+    orderDate.setHours(0, 0, 0, 0)
+    const isAcceptedOrCompleted = order.status === "ready_for_pickup" || order.status === "accepted"
+    const isWithin14Days = orderDate >= fourteenDaysAgo && orderDate < today
+    return isAcceptedOrCompleted && isWithin14Days
+  })
 
   return {
     pendingOrders,
