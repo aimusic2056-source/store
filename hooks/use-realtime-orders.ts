@@ -8,6 +8,7 @@ import type { FirestoreOrder } from "@/components/order-popup-panel"
 interface UseRealtimeOrdersReturn {
   pendingOrders: FirestoreOrder[]
   acceptedOrders: FirestoreOrder[]
+  completedOrders: FirestoreOrder[]
   allOrders: FirestoreOrder[]
   todayOrders: FirestoreOrder[]
   pastOrders: FirestoreOrder[]
@@ -16,16 +17,22 @@ interface UseRealtimeOrdersReturn {
   pendingOrderForPopup: FirestoreOrder | null
   dismissPopup: () => void
   handleStatusUpdate: (orderId: string, newStatus: string) => void
+  // Revenue tracking - persists when orders move from accepted to completed
+  capturedRevenue: number
 }
 
 export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersReturn {
   const [pendingOrders, setPendingOrders] = useState<FirestoreOrder[]>([])
   const [acceptedOrders, setAcceptedOrders] = useState<FirestoreOrder[]>([])
+  const [completedOrders, setCompletedOrders] = useState<FirestoreOrder[]>([])
   const [allOrders, setAllOrders] = useState<FirestoreOrder[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pendingOrderForPopup, setPendingOrderForPopup] = useState<FirestoreOrder | null>(null)
   const [dismissedOrderIds, setDismissedOrderIds] = useState<Set<string>>(new Set())
+  
+  // Track captured revenue from accepted orders (persists even after becoming completed)
+  const [capturedRevenueIds, setCapturedRevenueIds] = useState<Set<string>>(new Set())
 
   // Convert Firestore timestamp to Date
   const convertTimestamp = (timestamp: unknown): Date => {
@@ -77,24 +84,35 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
 
   // Handle status update from popup
   const handleStatusUpdate = useCallback((orderId: string, newStatus: string) => {
-    // Update local state immediately for instant UI feedback
+    // When an order is accepted, capture its revenue
     if (newStatus === "accepted") {
+      const order = pendingOrders.find(o => o.id === orderId)
+      if (order) {
+        setCapturedRevenueIds(prev => new Set([...prev, orderId]))
+      }
       setPendingOrders(prev => prev.filter(o => o.id !== orderId))
       setAcceptedOrders(prev => {
-        const order = pendingOrders.find(o => o.id === orderId)
-        if (order) {
-          return [...prev, { ...order, status: "accepted" as const }]
+        const orderToMove = pendingOrders.find(o => o.id === orderId)
+        if (orderToMove) {
+          return [...prev, { ...orderToMove, status: "accepted" as const }]
         }
         return prev
       })
-    } else if (newStatus === "rejected" || newStatus === "ready_for_pickup") {
+    } else if (newStatus === "rejected") {
       setPendingOrders(prev => prev.filter(o => o.id !== orderId))
       setAcceptedOrders(prev => prev.filter(o => o.id !== orderId))
+    } else if (newStatus === "ready_for_pickup") {
+      // Move from accepted to completed - revenue already captured
+      setAcceptedOrders(prev => prev.filter(o => o.id !== orderId))
+      const orderToMove = acceptedOrders.find(o => o.id === orderId)
+      if (orderToMove) {
+        setCompletedOrders(prev => [...prev, { ...orderToMove, status: "ready_for_pickup" as const }])
+      }
     }
     
     // Add to dismissed so popup doesn't reappear
     setDismissedOrderIds(prev => new Set([...prev, orderId]))
-  }, [pendingOrders])
+  }, [pendingOrders, acceptedOrders])
 
   useEffect(() => {
     if (!storeId) {
@@ -102,25 +120,21 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
       return
     }
 
-    console.log("[v0] Listening for storeId:", storeId)
-
     setIsLoading(true)
     setError(null)
 
-    // Query for pending and accepted orders
-    const ordersQuery = query(
+    // Query for ALL orders (pending, accepted, ready_for_pickup, rejected)
+    // This ensures we count all orders for "Orders Today"
+    const allOrdersQuery = query(
       collection(db, "orders"),
       where("storeId", "==", storeId),
-      where("status", "in", ["pending", "accepted"]),
       orderBy("createdAt", "desc")
     )
 
-    // Set up real-time listener
+    // Set up real-time listener for ALL orders
     const unsubscribe = onSnapshot(
-      ordersQuery,
+      allOrdersQuery,
       (snapshot) => {
-        console.log("[v0] Snapshot received, docs count:", snapshot.docs.length)
-        
         const orders: FirestoreOrder[] = snapshot.docs.map((doc) => {
           const data = doc.data()
           return {
@@ -138,14 +152,22 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
           }
         })
 
+        // Separate by status
         const pending = orders.filter(o => o.status === "pending")
         const accepted = orders.filter(o => o.status === "accepted")
+        const completed = orders.filter(o => o.status === "ready_for_pickup")
         
-        console.log("[v0] Pending orders:", pending.length, "Accepted orders:", accepted.length)
+        // Update captured revenue IDs - include any accepted or completed orders
+        // This ensures revenue persists even after logout/login
+        const revenueOrders = orders.filter(o => 
+          o.status === "accepted" || o.status === "ready_for_pickup"
+        )
+        setCapturedRevenueIds(new Set(revenueOrders.map(o => o.id)))
         
         // Update state
         setPendingOrders(pending)
         setAcceptedOrders(accepted)
+        setCompletedOrders(completed)
         setAllOrders(orders)
         setIsLoading(false)
       },
@@ -160,19 +182,12 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
   }, [storeId])
 
   // Separate effect to handle popup triggering based on pending orders
-  // This runs whenever pendingOrders changes and checks if we should show a popup
   useEffect(() => {
     // Find the first pending order that hasn't been dismissed
     const nextOrder = pendingOrders.find(o => !dismissedOrderIds.has(o.id))
     
-    console.log("[v0] Checking for popup - pendingOrders:", pendingOrders.length, 
-      "dismissedIds:", dismissedOrderIds.size, 
-      "currentPopup:", pendingOrderForPopup?.id || "none",
-      "nextOrder:", nextOrder?.id || "none")
-    
     // If there's a pending order that's not dismissed and we're not showing any popup
     if (nextOrder && !pendingOrderForPopup) {
-      console.log("[v0] Showing popup for order:", nextOrder.id)
       setPendingOrderForPopup(nextOrder)
     }
   }, [pendingOrders, dismissedOrderIds, pendingOrderForPopup])
@@ -180,10 +195,16 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
   // Compute derived values
   const todayOrders = getTodayOrders(allOrders)
   const pastOrders = getPastOrders(allOrders)
+  
+  // Calculate captured revenue (from accepted and completed orders)
+  const capturedRevenue = allOrders
+    .filter(o => capturedRevenueIds.has(o.id))
+    .reduce((sum, o) => sum + o.total, 0)
 
   return {
     pendingOrders,
     acceptedOrders,
+    completedOrders,
     allOrders,
     todayOrders,
     pastOrders,
@@ -192,5 +213,6 @@ export function useRealtimeOrders(storeId: string | null): UseRealtimeOrdersRetu
     pendingOrderForPopup,
     dismissPopup,
     handleStatusUpdate,
+    capturedRevenue,
   }
 }

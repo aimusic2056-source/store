@@ -1,9 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
 import { Star, TrendingUp } from "lucide-react"
-import { doc, onSnapshot } from "firebase/firestore"
-import { db } from "@/lib/firebase"
 import { WaterDroplets } from "@/components/water-droplets"
 import type { StoreData } from "@/lib/store-data"
 import type { FirestoreOrder } from "@/components/order-popup-panel"
@@ -13,6 +10,8 @@ interface DashboardPageProps {
   realtimeOrders: FirestoreOrder[]
   pendingCount: number
   acceptedCount: number
+  completedCount: number
+  capturedRevenue: number
   onToggleStatus: () => void
   onNavigate: (page: string) => void
 }
@@ -21,42 +20,44 @@ export function DashboardPage({
   data, 
   realtimeOrders, 
   pendingCount, 
-  acceptedCount, 
+  acceptedCount,
+  completedCount,
+  capturedRevenue,
   onToggleStatus, 
   onNavigate 
 }: DashboardPageProps) {
-  const [storeRating, setStoreRating] = useState(0)
-  const [reviewCount, setReviewCount] = useState(0)
-  
   const logoUrl = data.storeInfo?.logo
 
-  // Subscribe to store rating and review count
-  useEffect(() => {
-    // Get the storeId from data or use a default approach
-    // For now, we'll use the rating from the store document
-    // This would need the storeId passed as a prop in production
-  }, [])
-
   // Calculate today's metrics from real-time orders
+  // Orders Today = ALL orders for today (pending + accepted + completed)
+  // Does NOT include rejected orders
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   
   const todayOrders = realtimeOrders.filter(order => {
     const orderDate = new Date(order.createdAt)
     orderDate.setHours(0, 0, 0, 0)
-    return orderDate.getTime() === today.getTime()
+    // Include pending, accepted, ready_for_pickup - NOT rejected
+    return orderDate.getTime() === today.getTime() && order.status !== "rejected"
   })
 
+  // Orders Today count - all non-rejected orders for today
   const ordersToday = todayOrders.length
-  const completedOrders = todayOrders.filter(o => o.status === "ready_for_pickup").length
-  const pendingOrdersCount = todayOrders.filter(o => o.status === "pending").length
   
-  // Calculate today's revenue from completed orders
-  const revenueToday = todayOrders
-    .filter(o => o.status === "ready_for_pickup" || o.status === "accepted")
-    .reduce((sum, o) => sum + o.total, 0)
+  // Completed orders count (ready_for_pickup status) for today
+  const todayCompletedOrders = todayOrders.filter(o => o.status === "ready_for_pickup").length
+  
+  // Pending orders count for today
+  const todayPendingOrders = todayOrders.filter(o => o.status === "pending").length
 
-  // Calculate weekly revenue (last 7 days)
+  // Today's revenue - captured when order is accepted, persists through completion
+  // This uses the capturedRevenue prop from the hook which tracks accepted + completed orders
+  const todayRevenueOrders = todayOrders.filter(o => 
+    o.status === "accepted" || o.status === "ready_for_pickup"
+  )
+  const revenueToday = todayRevenueOrders.reduce((sum, o) => sum + o.total, 0)
+
+  // Calculate weekly revenue (last 7 days) - same logic
   const sevenDaysAgo = new Date()
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
   sevenDaysAgo.setHours(0, 0, 0, 0)
@@ -68,8 +69,12 @@ export function DashboardPage({
     })
     .reduce((sum, o) => sum + o.total, 0)
 
-  // Get recent orders for display (max 5)
-  const recentOrders = todayOrders.slice(0, 5)
+  // Recent orders - show first 5 orders from Firestore 
+  // Include pending, accepted, and completed (ready_for_pickup)
+  // No time limit - always show first 5 based on order in Firestore
+  const recentOrders = realtimeOrders
+    .filter(o => o.status === "pending" || o.status === "accepted" || o.status === "ready_for_pickup")
+    .slice(0, 5)
 
   // Format time
   const formatTime = (date: Date) => {
@@ -170,7 +175,7 @@ export function DashboardPage({
             <p className="text-xs text-white/80">Orders Today</p>
             <p className="text-2xl font-bold text-white mt-1">{ordersToday}</p>
             <p className="text-[10px] text-white/60 mt-0.5">
-              {completedOrders} Completed / {pendingOrdersCount} Pending
+              {todayCompletedOrders} Completed / {todayPendingOrders} Pending
             </p>
           </div>
           <div 
@@ -248,35 +253,53 @@ export function DashboardPage({
         <div className="flex flex-col gap-3 pt-3">
           {recentOrders.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-white/70 text-sm">No orders yet today</p>
+              <p className="text-white/70 text-sm">No orders yet</p>
               <p className="text-white/50 text-xs mt-1">Orders will appear here when received</p>
             </div>
           ) : (
-            recentOrders.map((order) => (
-              <div
-                key={order.id}
-                className="rounded-xl p-3 flex items-center gap-3 transition-all duration-200 active:scale-[0.98]"
-                style={{
-                  background: "rgba(255, 255, 255, 0.2)",
-                  border: "1px solid rgba(255, 255, 255, 0.25)",
-                }}
-              >
-                <div className="w-12 h-12 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-                  <span className="text-primary font-bold text-xs">#{order.orderId.slice(-3)}</span>
+            recentOrders.map((order) => {
+              // Get the first item's image for display
+              const firstItemImage = order.items.length > 0 && order.items[0].image
+                ? order.items[0].image
+                : null
+
+              return (
+                <div
+                  key={order.id}
+                  className="rounded-xl p-3 flex items-center gap-3 transition-all duration-200 active:scale-[0.98]"
+                  style={{
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "1px solid rgba(255, 255, 255, 0.25)",
+                  }}
+                >
+                  {/* Product image or order ID fallback */}
+                  <div className="w-12 h-12 rounded-lg overflow-hidden shrink-0">
+                    {firstItemImage ? (
+                      <img 
+                        src={firstItemImage} 
+                        alt={order.items[0]?.name || "Product"} 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-primary/20 flex items-center justify-center">
+                        <span className="text-primary font-bold text-xs">#{order.orderId.slice(-3)}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white">{order.userName}</p>
+                    <p className="text-xs text-white/70">{order.items.length} item(s)</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-bold text-white">
+                      ZMW {order.total.toFixed(2)}
+                    </p>
+                    <p className="text-xs text-white/70">{formatTime(order.createdAt)}</p>
+                  </div>
+                  <StatusBadge status={getDisplayStatus(order.status)} />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white">{order.userName}</p>
-                  <p className="text-xs text-white/70">{order.items.length} item(s)</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-sm font-bold text-white">
-                    ZMW {order.total.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-white/70">{formatTime(order.createdAt)}</p>
-                </div>
-                <StatusBadge status={getDisplayStatus(order.status)} />
-              </div>
-            ))
+              )
+            })
           )}
         </div>
       </div>
@@ -287,8 +310,8 @@ export function DashboardPage({
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; text: string; label: string }> = {
     pending: { bg: "bg-[#f97316]/15", text: "text-[#f97316]", label: "Pending" },
-    accepted: { bg: "bg-primary/15", text: "text-primary", label: "Accepted" },
-    completed: { bg: "bg-[#22c55e]/15", text: "text-[#22c55e]", label: "Completed" },
+    accepted: { bg: "bg-[#22c55e]/15", text: "text-[#22c55e]", label: "Accepted" },
+    completed: { bg: "bg-[#1a73e8]/15", text: "text-[#1a73e8]", label: "Completed" },
   }
   const c = config[status] || config.pending
   return (

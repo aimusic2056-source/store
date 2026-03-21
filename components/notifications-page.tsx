@@ -8,6 +8,7 @@ interface NotificationsPageProps {
   storeId: string | null
   pendingOrders: FirestoreOrder[]
   onMarkAllRead: () => void
+  onNavigate: (page: string) => void
 }
 
 // Notification types matching the reference design
@@ -24,25 +25,47 @@ interface Notification {
   customerName?: string
   amount?: number
   driverName?: string
+  isClickable?: boolean
 }
 
-export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: NotificationsPageProps) {
+export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead, onNavigate }: NotificationsPageProps) {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [readIds, setReadIds] = useState<Set<string>>(new Set())
 
   // Generate notifications from pending orders and add sample notifications
   useEffect(() => {
-    const orderNotifications: Notification[] = pendingOrders.map((order) => ({
-      id: `order-${order.id}`,
-      type: "new_order" as NotificationType,
-      title: "New Order Received!",
-      description: `Order #${order.orderId} for ${order.userName} (Total: ZMW ${order.total.toFixed(2)}) is pending fulfillment.`,
-      timestamp: order.createdAt,
-      read: false,
-      orderId: order.orderId,
-      customerName: order.userName,
-      amount: order.total,
-    }))
+    // Create the "New Order Received" notification card - shows the most recent pending order
+    // This card is ALWAYS at the top and taps to open Pending Orders page
+    const newOrderNotifications: Notification[] = []
+    
+    // Add the NEW ORDER RECEIVED card at the very top
+    // This shows the most recent pending order info
+    if (pendingOrders.length > 0) {
+      const mostRecentOrder = pendingOrders[0] // First one is most recent (sorted by createdAt desc)
+      newOrderNotifications.push({
+        id: "new-order-card",
+        type: "new_order",
+        title: "New Order Received!",
+        description: `Order #${mostRecentOrder.orderId} for ${mostRecentOrder.userName} (Total: ZMW ${mostRecentOrder.total.toFixed(2)}) is pending fulfillment.`,
+        timestamp: mostRecentOrder.createdAt,
+        read: false,
+        orderId: mostRecentOrder.orderId,
+        customerName: mostRecentOrder.userName,
+        amount: mostRecentOrder.total,
+        isClickable: true, // This card navigates to Pending Orders page
+      })
+    } else {
+      // Even if no pending orders, show a placeholder that can navigate to pending orders page
+      newOrderNotifications.push({
+        id: "new-order-card",
+        type: "new_order",
+        title: "New Order Received!",
+        description: "No pending orders at the moment. Tap to view pending orders.",
+        timestamp: new Date(),
+        read: true, // Mark as read if no pending orders
+        isClickable: true,
+      })
+    }
 
     // Add sample notifications for demonstration (matching reference image)
     const sampleNotifications: Notification[] = [
@@ -77,12 +100,8 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
       },
     ]
 
-    // Combine order notifications with sample ones
-    // If there are real orders, show them first
-    const allNotifications = [...orderNotifications, ...sampleNotifications]
-    
-    // Sort by timestamp (newest first)
-    allNotifications.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    // Combine: New Order card first, then sample notifications
+    const allNotifications = [...newOrderNotifications, ...sampleNotifications]
     
     setNotifications(allNotifications)
   }, [pendingOrders])
@@ -104,9 +123,16 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
     return "1+ day ago"
   }
 
-  // Handle marking a notification as read
-  const handleNotificationTap = (notificationId: string) => {
-    setReadIds(prev => new Set([...prev, notificationId]))
+  // Handle notification tap
+  const handleNotificationTap = (notification: Notification) => {
+    // If this is the "New Order Received" card, navigate to pending orders page
+    if (notification.id === "new-order-card" || notification.isClickable) {
+      onNavigate("pendingOrders")
+      return
+    }
+    
+    // Mark as read
+    setReadIds(prev => new Set([...prev, notification.id]))
   }
 
   // Handle mark all as read
@@ -203,12 +229,15 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
                 const style = getNotificationStyle(notification.type)
                 const IconComponent = style.icon
                 const unread = isUnread(notification.id)
+                const isNewOrderCard = notification.id === "new-order-card"
                 
                 return (
                   <div 
                     key={notification.id}
-                    onClick={() => handleNotificationTap(notification.id)}
-                    className="bg-card border border-border rounded-xl p-4 flex items-start gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer relative"
+                    onClick={() => handleNotificationTap(notification)}
+                    className={`bg-card border border-border rounded-xl p-4 flex items-start gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer relative ${
+                      isNewOrderCard ? "ring-2 ring-[#22c55e]/30" : ""
+                    }`}
                   >
                     {/* Unread indicator dot */}
                     {unread && (
@@ -222,12 +251,14 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
 
                     {/* Content */}
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-bold text-card-foreground">{notification.title}</h3>
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-card-foreground">{notification.title}</h3>
+                        <p className="text-xs text-muted-foreground/70">
+                          {getTimeSince(notification.timestamp)}
+                        </p>
+                      </div>
                       <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                         {notification.description}
-                      </p>
-                      <p className="text-xs text-muted-foreground/70 mt-1.5">
-                        {getTimeSince(notification.timestamp)}
                       </p>
                     </div>
                   </div>

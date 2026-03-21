@@ -44,7 +44,10 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
   const [isClosing, setIsClosing] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const startYRef = useRef(0)
-  const lastDragYRef = useRef(0)
+  const startDragYRef = useRef(0)
+  const velocityRef = useRef(0)
+  const lastMoveTimeRef = useRef(0)
+  const lastMoveYRef = useRef(0)
 
   // Animate in on mount
   useEffect(() => {
@@ -52,50 +55,75 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
     return () => clearTimeout(timer)
   }, [])
 
-  // Handle drag gestures - now for hiding/showing the panel
+  // Get max hide distance (panel height minus handle area)
+  const getMaxHide = () => {
+    if (panelRef.current) {
+      return panelRef.current.offsetHeight - 60 // Leave 60px visible (handle area)
+    }
+    return 400
+  }
+
+  // Touch event handlers for smooth dragging
   const handleTouchStart = (e: React.TouchEvent) => {
     startYRef.current = e.touches[0].clientY
-    lastDragYRef.current = dragY
+    startDragYRef.current = dragY
+    velocityRef.current = 0
+    lastMoveTimeRef.current = Date.now()
+    lastMoveYRef.current = e.touches[0].clientY
     setIsDragging(true)
   }
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!isDragging) return
+    
     const currentY = e.touches[0].clientY
-    const diff = startYRef.current - currentY // Positive when dragging up
-
-    if (isHidden) {
-      // When hidden, only allow pulling down (negative diff means pulling down)
-      if (diff < 0) {
-        const newDragY = Math.max(0, lastDragYRef.current + diff)
-        setDragY(newDragY)
-      }
-    } else {
-      // When visible, only allow pushing up (positive diff means pushing up)
-      if (diff > 0) {
-        const maxHide = panelRef.current ? panelRef.current.offsetHeight - 80 : 400
-        const newDragY = Math.min(maxHide, diff)
-        setDragY(newDragY)
-      }
+    const now = Date.now()
+    const timeDelta = now - lastMoveTimeRef.current
+    
+    // Calculate velocity for momentum
+    if (timeDelta > 0) {
+      velocityRef.current = (currentY - lastMoveYRef.current) / timeDelta
     }
+    lastMoveTimeRef.current = now
+    lastMoveYRef.current = currentY
+
+    const diff = startYRef.current - currentY // Positive when dragging up
+    const maxHide = getMaxHide()
+    
+    // Calculate new drag position
+    let newDragY = startDragYRef.current + diff
+    
+    // Clamp between 0 and maxHide with rubber band effect at edges
+    if (newDragY < 0) {
+      newDragY = newDragY * 0.3 // Rubber band effect when pulling down past 0
+    } else if (newDragY > maxHide) {
+      const overflow = newDragY - maxHide
+      newDragY = maxHide + overflow * 0.3 // Rubber band effect at top
+    }
+    
+    setDragY(newDragY)
   }
 
   const handleTouchEnd = () => {
     setIsDragging(false)
-    const maxHide = panelRef.current ? panelRef.current.offsetHeight - 80 : 400
-    const threshold = maxHide * 0.3
-
+    const maxHide = getMaxHide()
+    const threshold = maxHide * 0.35
+    
+    // Use velocity to determine intent (flick gestures)
+    const shouldHide = dragY > threshold || velocityRef.current < -0.5
+    const shouldShow = dragY < maxHide - threshold || velocityRef.current > 0.5
+    
     if (isHidden) {
-      // If hidden and dragged down enough, show the panel
-      if (dragY < maxHide - threshold) {
+      // Currently hidden - check if should show
+      if (shouldShow || dragY < threshold) {
         setDragY(0)
         setIsHidden(false)
       } else {
         setDragY(maxHide)
       }
     } else {
-      // If visible and dragged up enough, hide the panel
-      if (dragY > threshold) {
+      // Currently visible - check if should hide
+      if (shouldHide) {
         setDragY(maxHide)
         setIsHidden(true)
       } else {
@@ -103,6 +131,99 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
       }
     }
   }
+
+  // Mouse event handlers for PC support
+  const handleMouseDown = (e: React.MouseEvent) => {
+    startYRef.current = e.clientY
+    startDragYRef.current = dragY
+    velocityRef.current = 0
+    lastMoveTimeRef.current = Date.now()
+    lastMoveYRef.current = e.clientY
+    setIsDragging(true)
+    
+    // Prevent text selection during drag
+    e.preventDefault()
+  }
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return
+    
+    const currentY = e.clientY
+    const now = Date.now()
+    const timeDelta = now - lastMoveTimeRef.current
+    
+    if (timeDelta > 0) {
+      velocityRef.current = (currentY - lastMoveYRef.current) / timeDelta
+    }
+    lastMoveTimeRef.current = now
+    lastMoveYRef.current = currentY
+
+    const diff = startYRef.current - currentY
+    const maxHide = getMaxHide()
+    
+    let newDragY = startDragYRef.current + diff
+    
+    if (newDragY < 0) {
+      newDragY = newDragY * 0.3
+    } else if (newDragY > maxHide) {
+      const overflow = newDragY - maxHide
+      newDragY = maxHide + overflow * 0.3
+    }
+    
+    setDragY(newDragY)
+  }
+
+  const handleMouseUp = () => {
+    if (!isDragging) return
+    handleTouchEnd()
+  }
+
+  // Global mouse up listener for PC
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isDragging) {
+        handleTouchEnd()
+      }
+    }
+    
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return
+      
+      const currentY = e.clientY
+      const now = Date.now()
+      const timeDelta = now - lastMoveTimeRef.current
+      
+      if (timeDelta > 0) {
+        velocityRef.current = (currentY - lastMoveYRef.current) / timeDelta
+      }
+      lastMoveTimeRef.current = now
+      lastMoveYRef.current = currentY
+
+      const diff = startYRef.current - currentY
+      const maxHide = getMaxHide()
+      
+      let newDragY = startDragYRef.current + diff
+      
+      if (newDragY < 0) {
+        newDragY = newDragY * 0.3
+      } else if (newDragY > maxHide) {
+        const overflow = newDragY - maxHide
+        newDragY = maxHide + overflow * 0.3
+      }
+      
+      setDragY(newDragY)
+    }
+
+    if (isDragging) {
+      window.addEventListener("mouseup", handleGlobalMouseUp)
+      window.addEventListener("mousemove", handleGlobalMouseMove)
+    }
+
+    return () => {
+      window.removeEventListener("mouseup", handleGlobalMouseUp)
+      window.removeEventListener("mousemove", handleGlobalMouseMove)
+    }
+  }, [isDragging])
 
   const handleAccept = async () => {
     setIsAccepting(true)
@@ -126,7 +247,6 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
         status: "rejected"
       })
       onStatusUpdate(order.id, "rejected")
-      // Animate out then close
       setIsClosing(true)
       setTimeout(() => onClose(), 300)
     } catch (error) {
@@ -142,7 +262,6 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
         status: "ready_for_pickup"
       })
       onStatusUpdate(order.id, "ready_for_pickup")
-      // Animate out then close
       setIsClosing(true)
       setTimeout(() => onClose(), 300)
     } catch (error) {
@@ -161,27 +280,46 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
     return `${diffMins} mins ago`
   }
 
-  const maxHide = panelRef.current ? panelRef.current.offsetHeight - 80 : 400
+  const maxHide = getMaxHide()
+  
+  // Calculate if panel should block interaction (only when fully visible)
+  const shouldBlockInteraction = !isHidden && dragY < maxHide * 0.5
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col">
-      {/* Backdrop - only show when panel is not hidden */}
+    <div 
+      className="fixed inset-0 z-50 flex flex-col"
+      style={{
+        // Allow pointer events to pass through when panel is hidden
+        pointerEvents: shouldBlockInteraction ? "auto" : "none"
+      }}
+    >
+      {/* Backdrop - only visible when panel is shown and not hidden */}
       <div 
         className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity duration-300"
-        style={{ opacity: isHidden ? 0 : 1, pointerEvents: isHidden ? "none" : "auto" }}
-        onClick={() => {}}
+        style={{ 
+          opacity: isHidden || dragY > maxHide * 0.5 ? 0 : 1 - (dragY / maxHide) * 0.7,
+          pointerEvents: shouldBlockInteraction ? "auto" : "none"
+        }}
       />
       
       {/* Panel - slides down from top edge */}
       <div
         ref={panelRef}
-        className="relative w-full bg-white shadow-2xl overflow-hidden flex flex-col"
+        className="relative w-full bg-white overflow-hidden flex flex-col"
         style={{
           transform: `translateY(${isClosing ? "-100%" : isVisible ? -dragY : "-100%"}px)`,
-          transition: isDragging ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+          transition: isDragging ? "none" : "transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
           maxHeight: "60vh",
           borderBottomLeftRadius: "1.5rem",
           borderBottomRightRadius: "1.5rem",
+          // Realistic shadow with multiple layers
+          boxShadow: `
+            0 4px 6px -1px rgba(0, 0, 0, 0.1),
+            0 10px 15px -3px rgba(0, 0, 0, 0.15),
+            0 20px 25px -5px rgba(0, 0, 0, 0.1),
+            0 25px 50px -12px rgba(0, 0, 0, 0.25)
+          `,
+          pointerEvents: "auto"
         }}
       >
         {/* Fixed Top Section - Order Info */}
@@ -229,7 +367,7 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
           </div>
         </div>
 
-        {/* Fixed Bottom Section - Action Buttons */}
+        {/* Fixed Bottom Section - Action Buttons with realistic shadows */}
         <div className="px-6 py-4 border-t border-gray-100 shrink-0">
           {currentStatus === "pending" && (
             <div className="flex gap-3">
@@ -237,6 +375,9 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
                 onClick={handleReject}
                 disabled={isRejecting || isAccepting}
                 className="flex-1 py-3.5 px-6 rounded-xl border-2 border-red-500 text-red-500 font-semibold text-base transition-all duration-200 hover:bg-red-50 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                style={{
+                  boxShadow: "0 2px 4px rgba(239, 68, 68, 0.2), 0 4px 8px rgba(239, 68, 68, 0.1)"
+                }}
               >
                 {isRejecting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Reject"}
               </button>
@@ -244,6 +385,9 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
                 onClick={handleAccept}
                 disabled={isAccepting || isRejecting}
                 className="flex-1 py-3.5 px-6 rounded-xl bg-[#22c55e] text-white font-semibold text-base transition-all duration-200 hover:bg-[#16a34a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                style={{
+                  boxShadow: "0 2px 4px rgba(34, 197, 94, 0.3), 0 4px 8px rgba(34, 197, 94, 0.2)"
+                }}
               >
                 {isAccepting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Accept"}
               </button>
@@ -255,6 +399,9 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
               onClick={handleMarkReady}
               disabled={isMarkingReady}
               className="w-full py-3.5 px-6 rounded-xl bg-[#f97316] text-white font-semibold text-base transition-all duration-200 hover:bg-[#ea580c] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              style={{
+                boxShadow: "0 2px 4px rgba(249, 115, 22, 0.3), 0 4px 8px rgba(249, 115, 22, 0.2)"
+              }}
             >
               {isMarkingReady ? (
                 <>
@@ -268,14 +415,24 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
           )}
         </div>
 
-        {/* Drag Handle - BELOW the buttons */}
+        {/* Drag Handle - BELOW the buttons, draggable area */}
         <div 
-          className="flex justify-center py-3 cursor-grab active:cursor-grabbing shrink-0"
+          className="flex justify-center py-4 cursor-grab active:cursor-grabbing shrink-0 select-none"
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
+          onMouseDown={handleMouseDown}
+          style={{
+            // Make the entire handle area draggable
+            touchAction: "none"
+          }}
         >
-          <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
+          <div 
+            className="w-12 h-1.5 bg-gray-300 rounded-full transition-colors"
+            style={{
+              boxShadow: "0 1px 2px rgba(0, 0, 0, 0.1)"
+            }}
+          />
         </div>
       </div>
     </div>

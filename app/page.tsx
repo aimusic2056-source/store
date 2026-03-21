@@ -15,6 +15,7 @@ import { ProductsPage } from "@/components/products-page"
 import { AddProductPage } from "@/components/add-product-page"
 import { OpeningHoursPage } from "@/components/opening-hours-page"
 import { StoreInfoPage } from "@/components/store-info-page"
+import { PendingOrdersPage } from "@/components/pending-orders-page"
 import { BottomNavigation } from "@/components/bottom-navigation"
 import { OrderPopupPanel } from "@/components/order-popup-panel"
 import { useRealtimeOrders } from "@/hooks/use-realtime-orders"
@@ -37,11 +38,13 @@ export default function MerchantApp() {
   const {
     pendingOrders,
     acceptedOrders,
+    completedOrders,
     allOrders,
     todayOrders,
     pendingOrderForPopup,
     dismissPopup,
     handleStatusUpdate,
+    capturedRevenue,
   } = useRealtimeOrders(currentUserId)
 
   const pageOrder = ["dashboard", "orders", "notifications", "settings"]
@@ -348,7 +351,7 @@ export default function MerchantApp() {
   const unreadCount = storeData.notifications.filter((n) => !n.read).length
 
   // Determine if bottom nav should be hidden
-  const hideBottomNav = ["products", "addProduct", "openingHours", "storeInfo"].includes(activePage)
+  const hideBottomNav = ["products", "addProduct", "openingHours", "storeInfo", "pendingOrders"].includes(activePage)
 
   // Show loading state while checking auth
   if (isLoading) {
@@ -417,6 +420,8 @@ export default function MerchantApp() {
               realtimeOrders={allOrders}
               pendingCount={pendingOrders.length}
               acceptedCount={acceptedOrders.length}
+              completedCount={completedOrders.length}
+              capturedRevenue={capturedRevenue}
               onToggleStatus={handleToggleStatus}
               onNavigate={handleNavigate}
             />
@@ -432,6 +437,7 @@ export default function MerchantApp() {
               storeId={currentUserId}
               pendingOrders={pendingOrders}
               onMarkAllRead={handleMarkAllRead}
+              onNavigate={handleNavigate}
             />
           )}
           {activePage === "settings" && (
@@ -474,6 +480,15 @@ export default function MerchantApp() {
               storeId={currentUserId}
               onBack={handleBack}
               onSave={handleSaveStoreInfo}
+            />
+          )}
+          {activePage === "pendingOrders" && (
+            <PendingOrdersPage
+              pendingOrders={pendingOrders}
+              onBack={() => {
+                setDirection("left")
+                setActivePage("notifications")
+              }}
             />
           )}
         </div>
