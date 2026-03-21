@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { X, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { doc, updateDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
@@ -9,6 +9,7 @@ export interface OrderItem {
   name: string
   price: number
   quantity?: number
+  image?: string
 }
 
 export interface FirestoreOrder {
@@ -32,79 +33,121 @@ interface OrderPopupPanelProps {
 }
 
 export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPanelProps) {
-  const [isUpdating, setIsUpdating] = useState(false)
+  const [isAccepting, setIsAccepting] = useState(false)
+  const [isRejecting, setIsRejecting] = useState(false)
+  const [isMarkingReady, setIsMarkingReady] = useState(false)
+  const [currentStatus, setCurrentStatus] = useState(order.status)
+  const [isVisible, setIsVisible] = useState(false)
+  const [isHidden, setIsHidden] = useState(false)
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
+  const [isClosing, setIsClosing] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const startYRef = useRef(0)
+  const lastDragYRef = useRef(0)
 
-  // Handle drag gestures
+  // Animate in on mount
+  useEffect(() => {
+    const timer = setTimeout(() => setIsVisible(true), 10)
+    return () => clearTimeout(timer)
+  }, [])
+
+  // Handle drag gestures - now for hiding/showing the panel
   const handleTouchStart = (e: React.TouchEvent) => {
     startYRef.current = e.touches[0].clientY
+    lastDragYRef.current = dragY
     setIsDragging(true)
   }
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!isDragging) return
     const currentY = e.touches[0].clientY
-    const diff = currentY - startYRef.current
-    // Only allow dragging up (negative values mean dragging down to close)
-    if (diff > 0) {
-      setDragY(diff)
+    const diff = startYRef.current - currentY // Positive when dragging up
+
+    if (isHidden) {
+      // When hidden, only allow pulling down (negative diff means pulling down)
+      if (diff < 0) {
+        const newDragY = Math.max(0, lastDragYRef.current + diff)
+        setDragY(newDragY)
+      }
+    } else {
+      // When visible, only allow pushing up (positive diff means pushing up)
+      if (diff > 0) {
+        const maxHide = panelRef.current ? panelRef.current.offsetHeight - 80 : 400
+        const newDragY = Math.min(maxHide, diff)
+        setDragY(newDragY)
+      }
     }
   }
 
   const handleTouchEnd = () => {
     setIsDragging(false)
-    // If dragged more than 100px down, close the panel
-    if (dragY > 100) {
-      onClose()
+    const maxHide = panelRef.current ? panelRef.current.offsetHeight - 80 : 400
+    const threshold = maxHide * 0.3
+
+    if (isHidden) {
+      // If hidden and dragged down enough, show the panel
+      if (dragY < maxHide - threshold) {
+        setDragY(0)
+        setIsHidden(false)
+      } else {
+        setDragY(maxHide)
+      }
     } else {
-      setDragY(0)
+      // If visible and dragged up enough, hide the panel
+      if (dragY > threshold) {
+        setDragY(maxHide)
+        setIsHidden(true)
+      } else {
+        setDragY(0)
+      }
     }
   }
 
   const handleAccept = async () => {
-    setIsUpdating(true)
+    setIsAccepting(true)
     try {
       await updateDoc(doc(db, "orders", order.id), {
         status: "accepted"
       })
+      setCurrentStatus("accepted")
       onStatusUpdate(order.id, "accepted")
     } catch (error) {
       console.error("Error accepting order:", error)
     } finally {
-      setIsUpdating(false)
+      setIsAccepting(false)
     }
   }
 
   const handleReject = async () => {
-    setIsUpdating(true)
+    setIsRejecting(true)
     try {
       await updateDoc(doc(db, "orders", order.id), {
         status: "rejected"
       })
       onStatusUpdate(order.id, "rejected")
-      onClose()
+      // Animate out then close
+      setIsClosing(true)
+      setTimeout(() => onClose(), 300)
     } catch (error) {
       console.error("Error rejecting order:", error)
-    } finally {
-      setIsUpdating(false)
+      setIsRejecting(false)
     }
   }
 
   const handleMarkReady = async () => {
-    setIsUpdating(true)
+    setIsMarkingReady(true)
     try {
       await updateDoc(doc(db, "orders", order.id), {
         status: "ready_for_pickup"
       })
       onStatusUpdate(order.id, "ready_for_pickup")
-      onClose()
+      // Animate out then close
+      setIsClosing(true)
+      setTimeout(() => onClose(), 300)
     } catch (error) {
       console.error("Error marking order ready:", error)
-    } finally {
-      setIsUpdating(false)
+      setIsMarkingReady(false)
     }
   }
 
@@ -118,117 +161,121 @@ export function OrderPopupPanel({ order, onClose, onStatusUpdate }: OrderPopupPa
     return `${diffMins} mins ago`
   }
 
+  const maxHide = panelRef.current ? panelRef.current.offsetHeight - 80 : 400
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-50 flex flex-col">
+      {/* Backdrop - only show when panel is not hidden */}
       <div 
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={onClose}
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity duration-300"
+        style={{ opacity: isHidden ? 0 : 1, pointerEvents: isHidden ? "none" : "auto" }}
+        onClick={() => {}}
       />
       
-      {/* Panel - slides down from top */}
+      {/* Panel - slides down from top edge */}
       <div
         ref={panelRef}
-        className="relative w-full max-w-md mx-4 mt-4 bg-white rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-top duration-300"
+        className="relative w-full bg-white shadow-2xl overflow-hidden flex flex-col"
         style={{
-          transform: `translateY(${dragY}px)`,
-          transition: isDragging ? "none" : "transform 0.3s ease-out",
+          transform: `translateY(${isClosing ? "-100%" : isVisible ? -dragY : "-100%"}px)`,
+          transition: isDragging ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+          maxHeight: "60vh",
+          borderBottomLeftRadius: "1.5rem",
+          borderBottomRightRadius: "1.5rem",
         }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
       >
-        {/* Drag handle */}
-        <div className="flex justify-center pt-3 pb-2">
-          <div className="w-10 h-1 bg-gray-300 rounded-full" />
-        </div>
-
-        {/* Header */}
-        <div className="px-6 pb-4 border-b border-gray-100">
+        {/* Fixed Top Section - Order Info */}
+        <div className="px-6 pt-6 pb-4 border-b border-gray-100 shrink-0">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-gray-900">Order #{order.orderId}</h2>
-            <button
-              onClick={onClose}
-              className="p-1 rounded-full hover:bg-gray-100 transition-colors"
-              aria-label="Close"
-            >
-              <X className="w-5 h-5 text-gray-500" />
-            </button>
+            <span className="text-sm text-gray-500">{getTimeSince(order.createdAt)}</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">{getTimeSince(order.createdAt)}</p>
         </div>
 
-        {/* Customer Info */}
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-900">{order.userName}</h3>
-          <p className="text-sm text-gray-500">{order.destinationAddress}</p>
-        </div>
+        {/* Scrollable Middle Section */}
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {/* Customer Info */}
+          <div className="pb-4 border-b border-gray-100">
+            <h3 className="text-lg font-semibold text-gray-900">{order.userName}</h3>
+            <p className="text-sm text-gray-500 mt-1">{order.destinationAddress}</p>
+          </div>
 
-        {/* Items List */}
-        <div className="px-6 py-4 border-b border-gray-100">
-          {order.items.map((item, index) => (
-            <div key={index} className="flex justify-between items-center py-2">
-              <span className="text-gray-700">
-                {item.name} {item.quantity && item.quantity > 1 ? `x${item.quantity}` : ""}
-              </span>
-              <span className="text-gray-600">ZMW {item.price.toFixed(2)}</span>
+          {/* Items List */}
+          <div className="py-4 border-b border-gray-100">
+            {order.items.map((item, index) => (
+              <div key={index} className="flex justify-between items-center py-2">
+                <span className="text-gray-700">
+                  {item.name} {item.quantity && item.quantity > 1 ? `x${item.quantity}` : ""}
+                </span>
+                <span className="text-gray-600">ZMW {item.price.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Pricing Summary */}
+          <div className="py-4">
+            <div className="flex justify-between items-center py-1">
+              <span className="text-gray-500">Subtotal</span>
+              <span className="text-gray-700">ZMW {order.subtotal.toFixed(2)}</span>
             </div>
-          ))}
-        </div>
-
-        {/* Pricing Summary */}
-        <div className="px-6 py-4 border-b border-gray-100">
-          <div className="flex justify-between items-center py-1">
-            <span className="text-gray-500">Subtotal</span>
-            <span className="text-gray-700">ZMW {order.subtotal.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between items-center py-1">
-            <span className="text-gray-500">Delivery Fee</span>
-            <span className="text-gray-700">ZMW {order.deliveryFee.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between items-center py-2 mt-2 border-t border-gray-100">
-            <span className="text-lg font-bold text-gray-900">Total</span>
-            <span className="text-lg font-bold text-gray-900">ZMW {order.total.toFixed(2)}</span>
+            <div className="flex justify-between items-center py-1">
+              <span className="text-gray-500">Delivery Fee</span>
+              <span className="text-gray-700">ZMW {order.deliveryFee.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center py-2 mt-2 border-t border-gray-100">
+              <span className="text-lg font-bold text-gray-900">Total</span>
+              <span className="text-lg font-bold text-gray-900">ZMW {order.total.toFixed(2)}</span>
+            </div>
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="px-6 py-4">
-          {order.status === "pending" && (
+        {/* Fixed Bottom Section - Action Buttons */}
+        <div className="px-6 py-4 border-t border-gray-100 shrink-0">
+          {currentStatus === "pending" && (
             <div className="flex gap-3">
               <button
                 onClick={handleReject}
-                disabled={isUpdating}
-                className="flex-1 py-3.5 px-6 rounded-xl border-2 border-red-500 text-red-500 font-semibold text-base transition-all duration-200 hover:bg-red-50 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isRejecting || isAccepting}
+                className="flex-1 py-3.5 px-6 rounded-xl border-2 border-red-500 text-red-500 font-semibold text-base transition-all duration-200 hover:bg-red-50 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
               >
-                {isUpdating ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Reject"}
+                {isRejecting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Reject"}
               </button>
               <button
                 onClick={handleAccept}
-                disabled={isUpdating}
-                className="flex-1 py-3.5 px-6 rounded-xl bg-[#22c55e] text-white font-semibold text-base transition-all duration-200 hover:bg-[#16a34a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isAccepting || isRejecting}
+                className="flex-1 py-3.5 px-6 rounded-xl bg-[#22c55e] text-white font-semibold text-base transition-all duration-200 hover:bg-[#16a34a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
               >
-                {isUpdating ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Accept"}
+                {isAccepting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Accept"}
               </button>
             </div>
           )}
           
-          {order.status === "accepted" && (
+          {currentStatus === "accepted" && (
             <button
               onClick={handleMarkReady}
-              disabled={isUpdating}
-              className="w-full py-3.5 px-6 rounded-xl bg-[#22c55e] text-white font-semibold text-base transition-all duration-200 hover:bg-[#16a34a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              disabled={isMarkingReady}
+              className="w-full py-3.5 px-6 rounded-xl bg-[#f97316] text-white font-semibold text-base transition-all duration-200 hover:bg-[#ea580c] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              {isUpdating ? (
+              {isMarkingReady ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
                   Updating...
                 </>
               ) : (
-                "Mark as Ready"
+                "Ready for pickup"
               )}
             </button>
           )}
+        </div>
+
+        {/* Drag Handle - BELOW the buttons */}
+        <div 
+          className="flex justify-center py-3 cursor-grab active:cursor-grabbing shrink-0"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
         </div>
       </div>
     </div>

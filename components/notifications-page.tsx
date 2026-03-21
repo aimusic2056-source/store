@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { ChevronLeft, DollarSign, Clock, X } from "lucide-react"
+import { ChevronLeft, ShoppingBag, CreditCard, Truck, Megaphone } from "lucide-react"
 import type { FirestoreOrder } from "@/components/order-popup-panel"
 
 interface NotificationsPageProps {
@@ -10,19 +10,92 @@ interface NotificationsPageProps {
   onMarkAllRead: () => void
 }
 
-export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: NotificationsPageProps) {
-  const [readOrderIds, setReadOrderIds] = useState<Set<string>>(new Set())
-  const [showPendingList, setShowPendingList] = useState(false)
+// Notification types matching the reference design
+type NotificationType = "new_order" | "payment_captured" | "driver_assigned" | "system_message"
 
-  // Get time since order was created
-  const getTimeSince = (createdAt: Date): string => {
+interface Notification {
+  id: string
+  type: NotificationType
+  title: string
+  description: string
+  timestamp: Date
+  read: boolean
+  orderId?: string
+  customerName?: string
+  amount?: number
+  driverName?: string
+}
+
+export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: NotificationsPageProps) {
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [readIds, setReadIds] = useState<Set<string>>(new Set())
+
+  // Generate notifications from pending orders and add sample notifications
+  useEffect(() => {
+    const orderNotifications: Notification[] = pendingOrders.map((order) => ({
+      id: `order-${order.id}`,
+      type: "new_order" as NotificationType,
+      title: "New Order Received!",
+      description: `Order #${order.orderId} for ${order.userName} (Total: ZMW ${order.total.toFixed(2)}) is pending fulfillment.`,
+      timestamp: order.createdAt,
+      read: false,
+      orderId: order.orderId,
+      customerName: order.userName,
+      amount: order.total,
+    }))
+
+    // Add sample notifications for demonstration (matching reference image)
+    const sampleNotifications: Notification[] = [
+      {
+        id: "payment-1",
+        type: "payment_captured",
+        title: "Payment Captured",
+        description: "Payment for Order #45815 (Mike L.) of $42.00 was successfully processed.",
+        timestamp: new Date(Date.now() - 14 * 60 * 1000), // 14 min ago
+        read: false,
+        orderId: "45815",
+        customerName: "Mike L.",
+        amount: 42.00,
+      },
+      {
+        id: "driver-1",
+        type: "driver_assigned",
+        title: "Driver Assigned",
+        description: "Driver Alex R. has accepted Order #45812 for delivery.",
+        timestamp: new Date(Date.now() - 35 * 60 * 1000), // 35 min ago
+        read: false,
+        orderId: "45812",
+        driverName: "Alex R.",
+      },
+      {
+        id: "system-1",
+        type: "system_message",
+        title: "System Message",
+        description: "App Update: Version 3.4.1 is available now. Bug fixes & improvements.",
+        timestamp: new Date(Date.now() - 52 * 60 * 1000), // 52 min ago
+        read: false,
+      },
+    ]
+
+    // Combine order notifications with sample ones
+    // If there are real orders, show them first
+    const allNotifications = [...orderNotifications, ...sampleNotifications]
+    
+    // Sort by timestamp (newest first)
+    allNotifications.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    
+    setNotifications(allNotifications)
+  }, [pendingOrders])
+
+  // Get time since notification
+  const getTimeSince = (timestamp: Date): string => {
     const now = new Date()
-    const diffMs = now.getTime() - createdAt.getTime()
+    const diffMs = now.getTime() - timestamp.getTime()
     const diffMins = Math.floor(diffMs / 60000)
     
     if (diffMins < 1) return "Just now"
     if (diffMins === 1) return "1 min ago"
-    if (diffMins < 60) return `${diffMins} mins ago`
+    if (diffMins < 60) return `${diffMins} min ago`
     
     const diffHours = Math.floor(diffMins / 60)
     if (diffHours === 1) return "1 hour ago"
@@ -31,29 +104,64 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
     return "1+ day ago"
   }
 
-  // Mark notification as read when tapped
-  const handleNotificationTap = (orderId: string) => {
-    setReadOrderIds(prev => new Set([...prev, orderId]))
-    setShowPendingList(true)
+  // Handle marking a notification as read
+  const handleNotificationTap = (notificationId: string) => {
+    setReadIds(prev => new Set([...prev, notificationId]))
   }
 
-  // Mark all as read
+  // Handle mark all as read
   const handleMarkAllRead = () => {
-    const allIds = new Set(pendingOrders.map(o => o.id))
-    setReadOrderIds(allIds)
+    const allIds = new Set(notifications.map(n => n.id))
+    setReadIds(allIds)
     onMarkAllRead()
   }
 
-  // Check if notification has unread badge
-  const hasUnreadBadge = (orderId: string) => !readOrderIds.has(orderId)
+  // Check if notification is unread
+  const isUnread = (notificationId: string) => !readIds.has(notificationId)
 
-  // Count unread
-  const unreadCount = pendingOrders.filter(o => !readOrderIds.has(o.id)).length
+  // Count unread notifications
+  const unreadCount = notifications.filter(n => isUnread(n.id)).length
+
+  // Get icon and colors for notification type
+  const getNotificationStyle = (type: NotificationType) => {
+    switch (type) {
+      case "new_order":
+        return {
+          icon: ShoppingBag,
+          bgColor: "bg-[#22c55e]/15",
+          iconColor: "text-[#22c55e]",
+        }
+      case "payment_captured":
+        return {
+          icon: CreditCard,
+          bgColor: "bg-[#1a73e8]/15",
+          iconColor: "text-[#1a73e8]",
+        }
+      case "driver_assigned":
+        return {
+          icon: Truck,
+          bgColor: "bg-[#14b8a6]/15",
+          iconColor: "text-[#14b8a6]",
+        }
+      case "system_message":
+        return {
+          icon: Megaphone,
+          bgColor: "bg-[#a855f7]/15",
+          iconColor: "text-[#a855f7]",
+        }
+      default:
+        return {
+          icon: ShoppingBag,
+          bgColor: "bg-gray-100",
+          iconColor: "text-gray-500",
+        }
+    }
+  }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-background">
       {/* Fixed Header */}
-      <div className="bg-card px-4 pt-5 pb-4 shrink-0">
+      <div className="bg-card px-4 pt-5 pb-4 shrink-0 z-10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button className="text-card-foreground" aria-label="Go back">
@@ -65,7 +173,7 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
             <button
               id="markAllReadButton"
               onClick={handleMarkAllRead}
-              className="text-sm font-medium text-primary transition-colors duration-200 hover:text-primary/80"
+              className="text-sm font-medium text-muted-foreground transition-colors duration-200 hover:text-primary"
             >
               Mark all as read
             </button>
@@ -74,168 +182,65 @@ export function NotificationsPage({ storeId, pendingOrders, onMarkAllRead }: Not
       </div>
 
       {/* Scrollable Notifications List */}
-      <div id="notificationsList" className="flex-1 overflow-y-auto px-4 pb-2 scrollbar-hide">
-        <div className="flex flex-col gap-3">
-          {pendingOrders.length === 0 ? (
+      <div 
+        id="notificationsList" 
+        className="flex-1 overflow-y-auto px-4 pb-20 scrollbar-hide"
+      >
+        <div className="flex flex-col gap-3 pt-2">
+          {notifications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mb-4">
-                <DollarSign className="w-8 h-8 text-muted-foreground" />
+                <ShoppingBag className="w-8 h-8 text-muted-foreground" />
               </div>
-              <p className="text-muted-foreground font-medium">No order received</p>
+              <p className="text-muted-foreground font-medium">No notifications</p>
               <p className="text-muted-foreground/70 text-sm mt-1">
-                New orders will appear here
+                New notifications will appear here
               </p>
             </div>
           ) : (
-            pendingOrders.map((order) => (
-              <NotificationCard 
-                key={order.id} 
-                order={order}
-                hasUnread={hasUnreadBadge(order.id)}
-                getTimeSince={getTimeSince}
-                onTap={() => handleNotificationTap(order.id)}
-              />
-            ))
-          )}
-        </div>
-      </div>
+            <>
+              {notifications.map((notification) => {
+                const style = getNotificationStyle(notification.type)
+                const IconComponent = style.icon
+                const unread = isUnread(notification.id)
+                
+                return (
+                  <div 
+                    key={notification.id}
+                    onClick={() => handleNotificationTap(notification.id)}
+                    className="bg-card border border-border rounded-xl p-4 flex items-start gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer relative"
+                  >
+                    {/* Unread indicator dot */}
+                    {unread && (
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-[#f97316]" />
+                    )}
 
-      {/* Pending Orders Modal */}
-      {showPendingList && (
-        <PendingOrdersModal 
-          orders={pendingOrders}
-          onClose={() => setShowPendingList(false)}
-          getTimeSince={getTimeSince}
-        />
-      )}
-    </div>
-  )
-}
+                    {/* Icon */}
+                    <div className={`${style.bgColor} w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ml-3`}>
+                      <IconComponent className={`w-6 h-6 ${style.iconColor}`} />
+                    </div>
 
-interface NotificationCardProps {
-  order: FirestoreOrder
-  hasUnread: boolean
-  getTimeSince: (date: Date) => string
-  onTap: () => void
-}
-
-function NotificationCard({ order, hasUnread, getTimeSince, onTap }: NotificationCardProps) {
-  // Live minute counter
-  const [timeDisplay, setTimeDisplay] = useState(getTimeSince(order.createdAt))
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTimeDisplay(getTimeSince(order.createdAt))
-    }, 60000) // Update every minute
-
-    return () => clearInterval(interval)
-  }, [order.createdAt, getTimeSince])
-
-  return (
-    <div 
-      onClick={onTap}
-      className="bg-card border border-border rounded-xl p-4 flex items-start gap-3 shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer relative"
-    >
-      {/* Unread badge */}
-      {hasUnread && (
-        <span className="absolute top-2 left-2 w-2.5 h-2.5 rounded-full bg-destructive" />
-      )}
-
-      {/* Icon */}
-      <div className="bg-[#22c55e]/15 w-10 h-10 rounded-full flex items-center justify-center shrink-0 ml-2">
-        <DollarSign className="w-5 h-5 text-[#22c55e]" />
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <h3 className="text-sm font-bold text-card-foreground">New order received!</h3>
-        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-          Order #{order.orderId} for {order.userName} (Total: ZMW {order.total.toFixed(2)}) is pending fulfillment.
-        </p>
-        <div className="flex items-center gap-1 mt-1.5 text-muted-foreground/70">
-          <Clock className="w-3 h-3" />
-          <span className="text-[10px]">{timeDisplay}</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface PendingOrdersModalProps {
-  orders: FirestoreOrder[]
-  onClose: () => void
-  getTimeSince: (date: Date) => string
-}
-
-function PendingOrdersModal({ orders, onClose, getTimeSince }: PendingOrdersModalProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col">
-      {/* Backdrop */}
-      <div 
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      
-      {/* Modal */}
-      <div 
-        className="relative flex flex-col h-full bg-background"
-        style={{
-          backdropFilter: "blur(20px)",
-          background: "rgba(255, 255, 255, 0.98)",
-        }}
-      >
-        {/* Fixed Header */}
-        <div className="px-4 pt-5 pb-4 border-b border-border flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={onClose}
-              className="text-card-foreground" 
-              aria-label="Go back"
-            >
-              <ChevronLeft className="w-6 h-6" />
-            </button>
-            <h1 className="text-xl font-bold text-card-foreground">Pending Orders</h1>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-full hover:bg-muted transition-colors"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5 text-muted-foreground" />
-          </button>
-        </div>
-
-        {/* Scrollable Orders List */}
-        <div className="flex-1 overflow-y-auto px-4 py-4">
-          {orders.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <p className="text-muted-foreground">No pending orders</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {orders.map((order) => (
-                <div 
-                  key={order.id}
-                  className="bg-card border border-border rounded-xl p-4 shadow-sm"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-card-foreground">
-                      Order #{order.orderId}
-                    </h3>
-                    <span className="bg-[#f97316]/15 text-[#f97316] text-[10px] font-semibold px-2.5 py-1 rounded-full">
-                      Pending
-                    </span>
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-sm font-bold text-card-foreground">{notification.title}</h3>
+                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                        {notification.description}
+                      </p>
+                      <p className="text-xs text-muted-foreground/70 mt-1.5">
+                        {getTimeSince(notification.timestamp)}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">{order.userName}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <p className="text-sm font-bold text-card-foreground">
-                      ZMW {order.total.toFixed(2)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{getTimeSince(order.createdAt)}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+                )
+              })}
+
+              {/* Older Notifications link */}
+              <div className="text-center py-4">
+                <button className="text-sm text-muted-foreground/70 hover:text-muted-foreground transition-colors">
+                  Older Notifications
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>
