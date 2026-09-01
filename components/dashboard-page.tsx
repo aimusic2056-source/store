@@ -2,8 +2,6 @@
 
 import { useState, useEffect } from "react"
 import { Star, TrendingUp } from "lucide-react"
-import { doc, onSnapshot } from "firebase/firestore"
-import { db } from "@/lib/firebase"
 import { WaterDroplets } from "@/components/water-droplets"
 import type { StoreData } from "@/lib/store-data"
 import type { FirestoreOrder } from "@/components/order-popup-panel"
@@ -25,38 +23,34 @@ export function DashboardPage({
   onToggleStatus, 
   onNavigate 
 }: DashboardPageProps) {
-  const [storeRating, setStoreRating] = useState(0)
-  const [reviewCount, setReviewCount] = useState(0)
-  
   const logoUrl = data.storeInfo?.logo
-
-  // Subscribe to store rating and review count
-  useEffect(() => {
-    // Get the storeId from data or use a default approach
-    // For now, we'll use the rating from the store document
-    // This would need the storeId passed as a prop in production
-  }, [])
 
   // Calculate today's metrics from real-time orders
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   
+  // Get all today's orders (excluding rejected)
   const todayOrders = realtimeOrders.filter(order => {
     const orderDate = new Date(order.createdAt)
     orderDate.setHours(0, 0, 0, 0)
-    return orderDate.getTime() === today.getTime()
+    return orderDate.getTime() === today.getTime() && order.status !== "rejected"
   })
 
+  // Orders Today = ALL orders for today (pending + accepted + completed)
   const ordersToday = todayOrders.length
+  
+  // Completed orders count
   const completedOrders = todayOrders.filter(o => o.status === "ready_for_pickup").length
+  
+  // Pending orders count
   const pendingOrdersCount = todayOrders.filter(o => o.status === "pending").length
   
-  // Calculate today's revenue from completed orders
+  // Revenue today = sum of accepted AND completed orders (revenue persists after completion)
   const revenueToday = todayOrders
-    .filter(o => o.status === "ready_for_pickup" || o.status === "accepted")
+    .filter(o => o.status === "accepted" || o.status === "ready_for_pickup")
     .reduce((sum, o) => sum + o.total, 0)
 
-  // Calculate weekly revenue (last 7 days)
+  // Calculate weekly revenue (last 7 days) - includes accepted and completed orders
   const sevenDaysAgo = new Date()
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
   sevenDaysAgo.setHours(0, 0, 0, 0)
@@ -68,7 +62,7 @@ export function DashboardPage({
     })
     .reduce((sum, o) => sum + o.total, 0)
 
-  // Get recent orders for display (max 5)
+  // Get recent orders for display (max 5) - show pending, accepted, and completed
   const recentOrders = todayOrders.slice(0, 5)
 
   // Format time
@@ -261,8 +255,19 @@ export function DashboardPage({
                   border: "1px solid rgba(255, 255, 255, 0.25)",
                 }}
               >
-                <div className="w-12 h-12 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-                  <span className="text-primary font-bold text-xs">#{order.orderId.slice(-3)}</span>
+                {/* Product image from first item */}
+                <div className="w-12 h-12 rounded-lg overflow-hidden bg-white/20 shrink-0">
+                  {order.items.length > 0 && order.items[0].image ? (
+                    <img 
+                      src={order.items[0].image} 
+                      alt={order.items[0].name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-primary/20 flex items-center justify-center">
+                      <span className="text-primary font-bold text-xs">#{order.orderId.slice(-3)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white">{order.userName}</p>
@@ -285,10 +290,11 @@ export function DashboardPage({
 }
 
 function StatusBadge({ status }: { status: string }) {
+  // Status colors: Pending = orange, Accepted = green, Completed = blue
   const config: Record<string, { bg: string; text: string; label: string }> = {
     pending: { bg: "bg-[#f97316]/15", text: "text-[#f97316]", label: "Pending" },
-    accepted: { bg: "bg-primary/15", text: "text-primary", label: "Accepted" },
-    completed: { bg: "bg-[#22c55e]/15", text: "text-[#22c55e]", label: "Completed" },
+    accepted: { bg: "bg-[#22c55e]/15", text: "text-[#22c55e]", label: "Accepted" },
+    completed: { bg: "bg-[#3b82f6]/15", text: "text-[#3b82f6]", label: "Completed" },
   }
   const c = config[status] || config.pending
   return (
